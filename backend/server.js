@@ -68,13 +68,24 @@ app.post('/api/analyze', async (req, res) => {
             result = await model.generateContent([prompt, imagePart]);
         } else if (req.body.audio) {
             // Handle Audio Input (Base64)
+            const mimeType = req.body.mimeType || "audio/mp3";
             const audioPart = {
                 inlineData: {
                     data: req.body.audio,
-                    mimeType: "audio/mp3" // Assuming generic MP3/M4A
+                    mimeType: mimeType
                 }
             };
-            result = await model.generateContent([prompt || "Transcribe and analyze this audio.", audioPart]);
+
+            /// If prompt is missing but audio exists, add transcription prompt
+            const requestParts = [];
+            if (prompt) {
+                requestParts.push(prompt);
+            } else {
+                requestParts.push("Transcribe this audio and then answer it as a clinical assistant.");
+            }
+            requestParts.push(audioPart);
+
+            result = await model.generateContent(requestParts);
         } else {
             // Text-only chat
             result = await chat.sendMessage(prompt);
