@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import { Chrome as Home, Users, CheckSquare, Sparkles, Settings } from 'lucide-react-native';
+import { Chrome as Home, Users, CheckSquare, Sparkles, Settings, DollarSign } from 'lucide-react-native';
 import { View } from 'react-native';
 
 export default function TabLayout() {
@@ -46,8 +46,8 @@ export default function TabLayout() {
             <Tabs.Screen
                 name="tasks"
                 options={{
-                    title: 'Tasks',
-                    tabBarIcon: ({ color }) => <CheckSquare size={24} color={color} />,
+                    title: 'Billing',
+                    tabBarIcon: ({ color }) => <DollarSign size={24} color={color} />,
                 }}
             />
             <Tabs.Screen
