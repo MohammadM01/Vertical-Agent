@@ -1,47 +1,156 @@
-import { View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Platform } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, Image, ActivityIndicator, Alert, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Send, Mic, Image as ImageIcon } from 'lucide-react-native';
-import { useState } from 'react';
+import { Send, Image as ImageIcon, Mic, X, Square } from 'lucide-react-native';
+import { useState, useRef } from 'react';
 import axios from 'axios';
+import * as ImagePicker from 'expo-image-picker';
+import { Audio } from 'expo-av';
+import * as FileSystem from 'expo-file-system';
+import { syncService } from '../../services/SyncService';
 
-// Android Emulator uses 10.0.2.2 for localhost
-// Physical device needs your LAN IP (e.g., 192.168.1.x)
-const API_URL = Platform.OS === 'android'
-    ? 'http://10.0.2.2:3000/api/analyze'
-    : 'http://localhost:3000/api/analyze';
+// Use localhost for emulator (adb reverse required) or verify IP
+const API_URL = 'http://10.0.2.2:3000/api/analyze';
 
-export default function CopilotScreen() {
-    const [messages, setMessages] = useState([
-        { id: 1, text: "Hello Dr. Sarah. I'm ready to help. You can speak, type, or upload an image.", sender: 'ai' }
+interface Message {
+    id: number;
+    text: string;
+    sender: 'user' | 'ai';
+    image?: string;
+    audio?: string;
+    pending?: boolean;
+}
+
+export default function Copilot() {
+    const [messages, setMessages] = useState<Message[]>([
+        { id: 1, text: "Hello Dr. Sarah. I'm ready to assist with multimodal analysis. Upload an X-ray, wound photo, or record a voice note.", sender: 'ai' }
     ]);
     const [inputText, setInputText] = useState('');
     const [loading, setLoading] = useState(false);
+    const [selectedImage, setSelectedImage] = useState<string | null>(null);
+    const [recording, setRecording] = useState<Audio.Recording | null>(null);
+    const [isRecording, setIsRecording] = useState(false);
+    const scrollViewRef = useRef<ScrollView>(null);
+
+    const startRecording = async () => {
+        try {
+            const permission = await Audio.requestPermissionsAsync();
+            if (permission.status !== 'granted') return;
+
+            await Audio.setAudioModeAsync({
+                allowsRecordingIOS: true,
+                playsInSilentModeIOS: true,
+            });
+
+            const { recording } = await Audio.Recording.createAsync(
+                Audio.RecordingOptionsPresets.HIGH_QUALITY
+            );
+            setRecording(recording);
+            setIsRecording(true);
+        } catch (err) {
+            console.error('Failed to start recording', err);
+        }
+    };
+
+    const stopRecording = async () => {
+        setRecording(null);
+        setIsRecording(false);
+        if (!recording) return;
+
+        await recording.stopAndUnloadAsync();
+        const uri = recording.getURI();
+
+        if (uri) {
+            // Convert to Base64
+            const base64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
+
+            // Send Message
+            const userMessage: Message = {
+                id: Date.now(),
+                text: "🎤 Audio Note",
+                sender: 'user',
+                audio: uri, // Store local URI for playback if we implemented it
+                pending: true
+            };
+            setMessages(prev => [...prev, userMessage]);
+            setLoading(true);
+
+            const payload = {
+                prompt: "Please transcribe and summarize this medical audio note.",
+                audio: base64
+            };
+
+            try {
+                const result = await syncService.executeOrQueue('/api/analyze', 'POST', payload);
+                if (result.success) {
+                    const aiText = result.data.text;
+                    setMessages(prev => prev.map(m => m.id === userMessage.id ? { ...m, pending: false } : m));
+                    setMessages(prev => [...prev, { id: Date.now() + 1, text: aiText, sender: 'ai' }]);
+                } else if (result.queued) {
+                    setMessages(prev => prev.map(m => m.id === userMessage.id ? { ...m, pending: true } : m));
+                    setMessages(prev => [...prev, { id: Date.now() + 1, text: "Audio queued for offline analysis.", sender: 'ai' }]);
+                }
+            } catch (e) {
+                console.error(e);
+            } finally {
+                setLoading(false);
+            }
+        }
+    };
+
+    const pickImage = async () => {
+        let result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            allowsEditing: true,
+            quality: 0.5,
+            base64: true,
+        });
+
+        if (!result.canceled && result.assets && result.assets[0].base64) {
+            setSelectedImage(`data:image/jpeg;base64,${result.assets[0].base64}`);
+        }
+    };
 
     const sendMessage = async () => {
-        if (!inputText.trim()) return;
+        if ((!inputText.trim() && !selectedImage) || loading) return;
 
-        const userMsg = { id: Date.now(), text: inputText, sender: 'user' };
-        setMessages(prev => [...prev, userMsg]);
+        const userMessage: Message = {
+            id: Date.now(),
+            text: inputText,
+            sender: 'user',
+            image: selectedImage || undefined,
+            pending: true
+        };
+
+        setMessages(prev => [...prev, userMessage]);
         setInputText('');
+        setSelectedImage(null);
         setLoading(true);
 
         try {
-            // Construct history for context (simplified)
-            const history = messages.map(m => ({
-                role: m.sender,
-                text: m.text
+            const history = messages.filter(m => !m.pending).map(m => ({
+                role: m.sender === 'user' ? 'user' : 'model',
+                parts: [{ text: m.text }]
             }));
 
-            const response = await axios.post(API_URL, {
-                prompt: inputText,
+            const payload = {
+                prompt: userMessage.text || "Analyze this image.",
+                image: userMessage.image ? userMessage.image.split(',')[1] : null,
                 history: history
-            });
+            };
 
-            const aiText = response.data.text;
-            setMessages(prev => [...prev, { id: Date.now() + 1, text: aiText, sender: 'ai' }]);
+            const result = await syncService.executeOrQueue('/api/analyze', 'POST', payload);
+
+            if (result.success) {
+                const aiText = result.data.text;
+                setMessages(prev => prev.map(m => m.id === userMessage.id ? { ...m, pending: false } : m));
+                setMessages(prev => [...prev, { id: Date.now() + 1, text: aiText, sender: 'ai' }]);
+            } else if (result.queued) {
+                setMessages(prev => prev.map(m => m.id === userMessage.id ? { ...m, pending: true } : m));
+                setMessages(prev => [...prev, { id: Date.now() + 1, text: "You are offline. I've queued this analysis to run as soon as connection is restored.", sender: 'ai' }]);
+            }
         } catch (error) {
             console.error("API Error:", error);
-            setMessages(prev => [...prev, { id: Date.now() + 1, text: "Sorry, I couldn't reach the server. Is the backend running?", sender: 'ai' }]);
+            setMessages(prev => [...prev, { id: Date.now() + 1, text: "Error processing request.", sender: 'ai' }]);
         } finally {
             setLoading(false);
         }
@@ -49,49 +158,98 @@ export default function CopilotScreen() {
 
     return (
         <SafeAreaView className="flex-1 bg-slate-50">
-            <View className="p-4 border-b border-slate-100 bg-white">
-                <Text className="text-xl font-bold text-slate-800">Clinical Copilot</Text>
-                <Text className="text-xs text-slate-400">Powered by Gemini 3 Pro</Text>
+            {/* Header */}
+            <View className="px-4 py-3 bg-white border-b border-slate-200 flex-row items-center justify-between">
+                <View>
+                    <Text className="text-slate-900 font-bold text-lg">Clinical Copilot</Text>
+                    <Text className="text-teal-600 text-xs font-bold uppercase">Gemini 3 Pro Active</Text>
+                </View>
+                <View className="bg-teal-100 px-3 py-1 rounded-full">
+                    <Text className="text-teal-700 text-xs font-bold">Online</Text>
+                </View>
             </View>
 
-            <ScrollView className="flex-1 p-4" contentContainerStyle={{ paddingBottom: 20 }}>
+            {/* Chat Area */}
+            <ScrollView
+                className="flex-1 px-4 py-4"
+                ref={scrollViewRef}
+                onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
+            >
                 {messages.map((msg) => (
                     <View key={msg.id} className={`mb-4 flex-row ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-                        <View className={`max-w-[80%] p-4 rounded-2xl ${msg.sender === 'user'
-                                ? 'bg-teal-700 rounded-tr-none'
-                                : 'bg-white border border-slate-100 rounded-tl-none shadow-sm'
-                            }`}>
-                            <Text className={msg.sender === 'user' ? 'text-white' : 'text-slate-800'}>
-                                {msg.text}
-                            </Text>
+                        <View className={`rounded-2xl p-4 max-w-[85%] ${msg.sender === 'user' ? 'bg-teal-600 rounded-tr-none' : 'bg-white border border-slate-200 rounded-tl-none shadow-sm'} ${msg.pending ? 'opacity-70' : ''}`}>
+
+                            {/* Display Image if present */}
+                            {msg.image && (
+                                <Image source={{ uri: msg.image }} className="w-48 h-48 rounded-lg mb-2 bg-slate-200" resizeMode="cover" />
+                            )}
+
+                            {/* Display Audio Icon if present */}
+                            {msg.audio && (
+                                <View className="flex-row items-center space-x-2 bg-slate-100 p-2 rounded-lg mb-2">
+                                    <Mic size={20} color="#0f766e" />
+                                    <Text className="text-slate-600 text-xs">Audio Recording</Text>
+                                </View>
+                            )}
+
+                            {/* Message Text */}
+                            {msg.text ? <Text className={`${msg.sender === 'user' ? 'text-white' : 'text-slate-800'} text-base leading-6`}>{msg.text}</Text> : null}
+                            {msg.pending && <Text className="text-white/80 text-xs mt-1 italic">Queued for sync...</Text>}
                         </View>
                     </View>
                 ))}
                 {loading && (
-                    <View className="items-start mb-4 ml-2">
-                        <ActivityIndicator color="#0f766e" />
+                    <View className="mb-4 flex-row justify-start">
+                        <View className="bg-white p-4 rounded-2xl rounded-tl-none border border-slate-200 shadow-sm flex-row items-center">
+                            <ActivityIndicator color="#0d9488" size="small" />
+                            <Text className="text-slate-500 ml-2 text-sm italic">Analyzing data...</Text>
+                        </View>
                     </View>
                 )}
             </ScrollView>
 
             {/* Input Area */}
-            <View className="p-4 bg-white border-t border-slate-100 flex-row items-center">
-                <TouchableOpacity className="mr-3 p-2 bg-slate-100 rounded-full">
-                    <ImageIcon size={20} color="#64748b" />
-                </TouchableOpacity>
-                <TouchableOpacity className="mr-3 p-2 bg-slate-100 rounded-full">
-                    <Mic size={20} color="#64748b" />
-                </TouchableOpacity>
-                <TextInput
-                    className="flex-1 bg-slate-50 p-3 rounded-xl border border-slate-200 mr-3 text-slate-800"
-                    placeholder="Ask Gemini..."
-                    value={inputText}
-                    onChangeText={setInputText}
-                    onSubmitEditing={sendMessage}
-                />
-                <TouchableOpacity onPress={sendMessage} className="p-3 bg-teal-700 rounded-full shadow-md shadow-teal-700/20">
-                    <Send size={20} color="white" />
-                </TouchableOpacity>
+            <View className="p-4 bg-white border-t border-slate-200">
+                {/* Selected Image Preview */}
+                {selectedImage && (
+                    <View className="flex-row items-center bg-slate-100 p-2 rounded-lg mb-2 self-start border border-slate-200">
+                        <Image source={{ uri: selectedImage }} className="w-12 h-12 rounded mr-2" />
+                        <TouchableOpacity onPress={() => setSelectedImage(null)}>
+                            <X size={20} color="#64748b" />
+                        </TouchableOpacity>
+                    </View>
+                )}
+
+                <View className="flex-row items-end space-x-2">
+                    <TouchableOpacity onPress={pickImage} className="p-3 bg-slate-100 rounded-full border border-slate-200">
+                        <ImageIcon size={24} color="#475569" />
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        onPress={isRecording ? stopRecording : startRecording}
+                        className={`p-3 rounded-full border ${isRecording ? 'bg-red-500 border-red-600 animate-pulse' : 'bg-slate-100 border-slate-200'}`}
+                    >
+                        {isRecording ? <Square size={24} color="white" /> : <Mic size={24} color="#475569" />}
+                    </TouchableOpacity>
+
+                    <View className="flex-1 bg-slate-50 border border-slate-200 rounded-2xl px-4 py-2 max-h-32">
+                        <TextInput
+                            placeholder="Type or dictate notes..."
+                            className="text-slate-800 text-base"
+                            multiline
+                            value={inputText}
+                            onChangeText={setInputText}
+                        />
+                    </View>
+
+                    <TouchableOpacity
+                        onPress={sendMessage}
+                        disabled={loading || (!inputText && !selectedImage)}
+                        className={`p-3 rounded-full ${loading || (!inputText && !selectedImage) ? 'bg-slate-200' : 'bg-teal-600 shadow-lg shadow-teal-600/30'}`}
+                    >
+                        <Send size={24} color="white" />
+                    </TouchableOpacity>
+                </View>
             </View>
         </SafeAreaView>
     );

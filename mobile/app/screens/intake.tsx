@@ -73,7 +73,7 @@ export default function IntakeScreen() {
                 facing="back"
                 onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
                 barcodeScannerSettings={{
-                    barcodeTypes: ["qr", "pdf417", "ean13"],
+                    barcodeTypes: ["qr", "pdf417", "ean13", "ean8", "code128", "code39", "upc_e", "datamatrix", "aztec"],
                 }}
             />
 

@@ -40,8 +40,6 @@ app.post('/api/analyze', async (req, res) => {
         let result;
         if (image) {
             // Handle Image Input (Base64)
-            // Note: For multi-turn chat with images, we might need a different flow or use generateContent directly
-            // For now, let's assume single-turn multimodal or text-only chat
             const imagePart = {
                 inlineData: {
                     data: image,
@@ -49,6 +47,15 @@ app.post('/api/analyze', async (req, res) => {
                 }
             };
             result = await model.generateContent([prompt, imagePart]);
+        } else if (req.body.audio) {
+            // Handle Audio Input (Base64)
+            const audioPart = {
+                inlineData: {
+                    data: req.body.audio,
+                    mimeType: "audio/mp3" // Assuming generic MP3/M4A
+                }
+            };
+            result = await model.generateContent([prompt || "Transcribe and analyze this audio.", audioPart]);
         } else {
             // Text-only chat
             result = await chat.sendMessage(prompt);
