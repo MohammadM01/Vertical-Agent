@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+    .card-medical {
+        @apply bg-white rounded-2xl shadow-sm border border-slate-100 p-4;
+    }
+
+    .text-h1 {
+        @apply text-slate-900 text-3xl font-bold;
+    }
+
+    .text-h2 {
+        @apply text-slate-900 text-xl font-bold;
+    }
+
+    .text-label {
+        @apply text-slate-500 text-xs uppercase font-bold tracking-wider;
+    }
+
+    .btn-primary {
+        @apply bg-teal-700 p-4 rounded-xl flex-row items-center justify-center shadow-lg shadow-teal-700/30;
+    }
+}

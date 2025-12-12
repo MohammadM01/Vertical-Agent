@@ -1,0 +1,55 @@
+{
+  "expo": {
+    "name": "Gemini Clinic Agent",
+    "slug": "gemini-clinic-agent",
+    "version": "1.0.0",
+    "scheme": "geminiclinic",
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-sqlite",
+        {
+          "enableEmbeddedSQLite": true
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Gemini Clinic Agent to access your camera to scan ID and take photos."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "orientation": "default",
+    "icon": "./assets/images/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.gemini.clinic.agent",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "8703fbad-cbea-402c-8cd5-e4ce4f153980"
+      }
+    },
+    "owner": "mohammadm01s-organization"
+  }
+}
