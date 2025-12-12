@@ -99,6 +99,14 @@ export default function IntakeScreen() {
                     <Text className="text-white font-medium">Insurance</Text>
                 </TouchableOpacity>
             </View>
+
+            {/* Manual Trigger for Testing */}
+            <TouchableOpacity
+                onPress={() => handleBarCodeScanned({ type: 'manual', data: 'TEST-123' })}
+                className="absolute top-24 right-6 bg-orange-500/80 p-2 rounded-lg z-30"
+            >
+                <Text className="text-white text-xs font-bold">Simulate Scan</Text>
+            </TouchableOpacity>
         </View>
     );
 }

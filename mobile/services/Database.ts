@@ -23,9 +23,17 @@ class DatabaseService {
         data TEXT NOT NULL,
         lastUpdated INTEGER DEFAULT (unixepoch())
       );
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        action TEXT NOT NULL,
+        details TEXT,
+        timestamp INTEGER DEFAULT (unixepoch())
+      );
     `);
         console.log("Database initialized");
     }
+
+    // ... (queueAction, getQueuedActions, removeAction remain same)
 
     async queueAction(endpoint: string, method: string, body: any) {
         if (!this.db) await this.init();
@@ -67,12 +75,27 @@ class DatabaseService {
             'INSERT OR REPLACE INTO patient_cache (id, data, lastUpdated) VALUES (?, ?, ?)',
             patient.id, JSON.stringify(patient), Math.floor(Date.now() / 1000)
         );
+        this.logAction('PATIENT_SAVE', `Saved patient ${patient.id}`);
     }
 
     async getPatients() {
         if (!this.db) await this.init();
         const rows = await this.db?.getAllAsync('SELECT * FROM patient_cache ORDER BY lastUpdated DESC');
         return rows ? rows.map((r: any) => JSON.parse(r.data)) : [];
+    }
+
+    // Audit Log Methods
+    async logAction(action: string, details: string) {
+        if (!this.db) await this.init();
+        await this.db?.runAsync(
+            'INSERT INTO audit_logs (action, details, timestamp) VALUES (?, ?, ?)',
+            action, details, Math.floor(Date.now() / 1000)
+        );
+    }
+
+    async getAuditLogs() {
+        if (!this.db) await this.init();
+        return await this.db?.getAllAsync('SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT 50');
     }
 }
 
