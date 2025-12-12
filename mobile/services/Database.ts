@@ -53,6 +53,12 @@ class DatabaseService {
         await this.db?.runAsync('DELETE FROM offline_actions WHERE id = ?', id);
     }
 
+    async clearQueue() {
+        if (!this.db) await this.init();
+        await this.db?.runAsync('DELETE FROM offline_actions');
+        console.log("Offline queue cleared.");
+    }
+
     // Secure Storage for API Keys or PHI tokens
     async saveSecure(key: string, value: string) {
         if (Platform.OS !== 'web') {
@@ -69,13 +75,18 @@ class DatabaseService {
 
     // Patient Cache Methods
     async savePatient(patient: any) {
-        if (!this.db) await this.init();
-        // Encrypt sensitive name before storing? For demo, we store as JSON string
-        await this.db?.runAsync(
-            'INSERT OR REPLACE INTO patient_cache (id, data, lastUpdated) VALUES (?, ?, ?)',
-            patient.id, JSON.stringify(patient), Math.floor(Date.now() / 1000)
-        );
-        this.logAction('PATIENT_SAVE', `Saved patient ${patient.id}`);
+        try {
+            if (!this.db) await this.init();
+            await this.db?.runAsync(
+                'INSERT OR REPLACE INTO patient_cache (id, data, lastUpdated) VALUES (?, ?, ?)',
+                patient.id, JSON.stringify(patient), Math.floor(Date.now() / 1000)
+            );
+            this.logAction('PATIENT_SAVE', `Saved patient ${patient.id}`);
+            console.log(`[DB] Patient ${patient.id} saved successfully.`);
+        } catch (error) {
+            console.error("[DB] Failed to save patient:", error);
+            throw error; // Propagate so UI knows
+        }
     }
 
     async getPatients() {
@@ -86,11 +97,15 @@ class DatabaseService {
 
     // Audit Log Methods
     async logAction(action: string, details: string) {
-        if (!this.db) await this.init();
-        await this.db?.runAsync(
-            'INSERT INTO audit_logs (action, details, timestamp) VALUES (?, ?, ?)',
-            action, details, Math.floor(Date.now() / 1000)
-        );
+        try {
+            if (!this.db) await this.init();
+            await this.db?.runAsync(
+                'INSERT INTO audit_logs (action, details, timestamp) VALUES (?, ?, ?)',
+                action, details, Math.floor(Date.now() / 1000)
+            );
+        } catch (e) {
+            console.error("Audit log failed (non-fatal)", e);
+        }
     }
 
     async getAuditLogs() {

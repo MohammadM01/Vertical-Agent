@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Alert, Modal } from 'react-na
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useState } from 'react';
 import { router } from 'expo-router';
+import { database } from '../../services/Database';
 import { X, Scan, CreditCard } from 'lucide-react-native';
 
 export default function IntakeScreen() {
@@ -44,7 +45,6 @@ export default function IntakeScreen() {
                 {
                     text: "Save & Finish",
                     onPress: async () => {
-                        const { database } = require('../../services/Database'); // Lazy import to avoid cycle if any
                         await database.savePatient(newPatient);
                         Alert.alert("Saved", "Patient added to local queue.");
                         router.back();

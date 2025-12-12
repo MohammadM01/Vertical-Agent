@@ -1,15 +1,16 @@
 import { View, Text, TextInput, TouchableOpacity, ScrollView, Image, ActivityIndicator, Alert, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Send, Image as ImageIcon, Mic, X, Square } from 'lucide-react-native';
-import { useState, useRef } from 'react';
-import axios from 'axios';
+import { useState, useRef, useEffect } from 'react';
 import * as ImagePicker from 'expo-image-picker';
-// import { Audio } from 'expo-av'; // Deprecated
+import { Audio, InterruptionModeIOS, InterruptionModeAndroid } from 'expo-av';
 import * as FileSystem from 'expo-file-system';
+import * as Speech from 'expo-speech';
+import { router } from 'expo-router';
 import { syncService } from '../../services/SyncService';
 
 // Use localhost for emulator (adb reverse required) or verify IP
-const API_URL = 'http://10.0.2.2:3000/api/analyze';
+// const API_URL = 'http://10.11.178.99:3000/api/analyze';
 
 interface Message {
     id: number;
@@ -20,65 +21,159 @@ interface Message {
     pending?: boolean;
 }
 
+// Global variable to track recording across renders/mounts to prevent "Only one Recording" error
+let globalRecording: Audio.Recording | null = null;
+
 export default function Copilot() {
     const [messages, setMessages] = useState<Message[]>([
-        { id: 1, text: "Hello Dr. Sarah. I'm ready to assist with multimodal analysis. Upload an X-ray, wound photo, or record a voice note.", sender: 'ai' }
+        { id: 1, text: "Hello. I am your Clinical Co-worker. You can ask me to 'Show Bed 7 Report' or dictate a patient note.", sender: 'ai' }
     ]);
     const [inputText, setInputText] = useState('');
     const [loading, setLoading] = useState(false);
     const [selectedImage, setSelectedImage] = useState<string | null>(null);
     const [isRecording, setIsRecording] = useState(false);
-    const audioRecorderRef = useRef<any>(null); // To hold the recorder instance
+    const [lastVoiceInput, setLastVoiceInput] = useState(false); // Track if latest input was voice
+    const [recording, setRecording] = useState<Audio.Recording | null>(null);
+    const [isHandsFree, setIsHandsFree] = useState(false); // Hands-Free Mode
+    const silenceTimeoutRef = useRef<any>(null);
     const scrollViewRef = useRef<ScrollView>(null);
 
-    // Using expo-audio (New API)
-    // Note: Since expo-audio is experimental/new, we assume a standard API structure or fallback to a simplified flow.
-    // If exact types are missing in the beta, we suppress TS errors temporarily.
+    const speak = (text: string) => {
+        Speech.speak(text, {
+            language: 'en-US',
+            pitch: 1.0,
+            rate: 0.9,
+            onDone: () => {
+                if (isHandsFree) {
+                    // Slight delay before listening again to avoid picking up echo
+                    setTimeout(() => startRecording(), 500);
+                }
+            }
+        });
+    };
+
+    const handleAgentResponse = (responseText: string) => {
+        // 1. Speak Response if input was voice
+        if (lastVoiceInput) {
+            speak(responseText);
+        }
+
+        // 2. Intent Routing (Basic Regex for Demo)
+        // Expected format: "Here is the report... [ACTION: NAVIGATE_PATIENTS]"
+        if (responseText.includes("SHOW_PATIENTS") || responseText.toLowerCase().includes("show patient list")) {
+            router.push('/(tabs)/patients');
+        } else if (responseText.includes("SHOW_BILLING") || responseText.toLowerCase().includes("show billing")) {
+            router.push('/(tabs)/tasks'); // Tasks is renamed to Billing in UI
+        }
+    };
+
+    // Cleanup on unmount
+    // Cleanup on unmount
+    useEffect(() => {
+        return () => {
+            if (recordingRef.current) {
+                recordingRef.current.stopAndUnloadAsync();
+            }
+        };
+    }, []);
 
     const startRecording = async () => {
         try {
-            // @ts-ignore - expo-audio might be new/beta
-            const { AudioRecorder } = await import('expo-audio');
+            // Force cleanup of any existing recording (tracked by Ref)
+            if (recordingRef.current) {
+                console.log("Stopping existing recording ref...");
+                try {
+                    await recordingRef.current.stopAndUnloadAsync();
+                } catch (e) { console.log("Unload error (ignored):", e); }
+                recordingRef.current = null;
+                setRecording(null);
+            }
 
-            const permission = await AudioRecorder.requestPermissionsAsync();
+            console.log("Requesting permissions..");
+            const permission = await Audio.requestPermissionsAsync();
             if (permission.status !== 'granted') {
                 Alert.alert("Permission Denied", "Microphone access is needed.");
                 return;
             }
 
-            const recorder = new AudioRecorder();
-            await recorder.prepareToRecordAsync({
+            await Audio.setAudioModeAsync({
                 allowsRecordingIOS: true,
                 playsInSilentModeIOS: true,
-                quality: 'High',
+                interruptionModeIOS: 0,
+                shouldDuckAndroid: true,
+                interruptionModeAndroid: 1,
+                playThroughEarpieceAndroid: false,
             });
 
-            audioRecorderRef.current = recorder;
-            await recorder.recordAsync();
+            console.log("Starting recording..");
+            const { recording: newRecording } = await Audio.Recording.createAsync(
+                Audio.RecordingOptionsPresets.HIGH_QUALITY,
+                (status) => {
+                    if (status.isRecording && status.metering !== undefined) {
+                        if (status.metering < -45) { // Silence Threshold
+                            if (!silenceTimeoutRef.current) {
+                                silenceTimeoutRef.current = setTimeout(() => {
+                                    console.log("Silence detected, stopping...");
+                                    stopRecording();
+                                }, 2500);
+                            }
+                        } else {
+                            if (silenceTimeoutRef.current) {
+                                clearTimeout(silenceTimeoutRef.current);
+                                silenceTimeoutRef.current = null;
+                            }
+                        }
+                    }
+                },
+                100
+            );
+
+            recordingRef.current = newRecording; // Update Ref
+            setRecording(newRecording);          // Update State (for UI)
             setIsRecording(true);
-        } catch (err) {
+            setLastVoiceInput(true);
+            console.log("Recording started");
+        } catch (err: any) {
             console.error('Failed to start recording', err);
-            Alert.alert("Error", "Could not start recording.");
+            // Retry logic for "Only one Recording" error
+            if (err.message && err.message.includes("Only one Recording")) {
+                console.log("Retrying startRecording after cleanup...");
+                if (recordingRef.current) {
+                    await recordingRef.current.stopAndUnloadAsync();
+                    recordingRef.current = null;
+                }
+                setTimeout(startRecording, 500);
+            } else {
+                Alert.alert("Recording Error", err.message || "Could not start recording.");
+            }
         }
     };
 
     const stopRecording = async () => {
+        // Use Ref for immediate check
+        if (!recordingRef.current) return;
+
         setIsRecording(false);
-        const recorder = audioRecorderRef.current;
-        if (!recorder) return;
+        if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+
+        const currentRec = recordingRef.current; // Capture ref
 
         try {
-            await recorder.stopAsync();
-            const uri = recorder.uri; // expo-audio usually exposes 'uri' property
+            await currentRec.stopAndUnloadAsync();
+            const uri = currentRec.getURI();
+
+            // Clear Ref and State
+            recordingRef.current = null;
+            setRecording(null);
 
             if (uri) {
-                // Convert to Base64 using FileSystem (still needed)
+                // Convert to Base64
                 const base64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
 
                 // Send Message
                 const userMessage: Message = {
                     id: Date.now(),
-                    text: "🎤 Audio Note (expo-audio)",
+                    text: "🎤 Audio Note (expo-av)",
                     sender: 'user',
                     audio: uri,
                     pending: true
@@ -86,15 +181,21 @@ export default function Copilot() {
                 setMessages(prev => [...prev, userMessage]);
                 setLoading(true);
 
+                // Prompt Engineering
+                const prompt = "You are a hospital co-worker agent. Transcribe this audio. If the doctor asks for a specific screen (like 'show patients', 'show billing', 'show report'), reply with the confirmed action in the text. Then provide the answer. Keep it brief and professional.";
+
                 const payload = {
-                    prompt: "Please transcribe and summarize this medical audio note.",
+                    prompt: prompt,
                     audio: base64
                 };
 
                 const result = await syncService.executeOrQueue('/api/analyze', 'POST', payload);
                 if (result.success) {
+                    const aiText = result.data.text;
                     setMessages(prev => prev.map(m => m.id === userMessage.id ? { ...m, pending: false } : m));
-                    setMessages(prev => [...prev, { id: Date.now() + 1, text: result.data.text, sender: 'ai' }]);
+                    setMessages(prev => [...prev, { id: Date.now() + 1, text: aiText, sender: 'ai' }]);
+
+                    handleAgentResponse(aiText);
                 } else if (result.queued) {
                     setMessages(prev => prev.map(m => m.id === userMessage.id ? { ...m, pending: true } : m));
                     setMessages(prev => [...prev, { id: Date.now() + 1, text: "Audio queued for offline analysis.", sender: 'ai' }]);
@@ -104,7 +205,6 @@ export default function Copilot() {
             console.error("Stop recording failed", e);
         } finally {
             setLoading(false);
-            audioRecorderRef.current = null;
         }
     };
 
@@ -123,6 +223,7 @@ export default function Copilot() {
 
     const sendMessage = async () => {
         if ((!inputText.trim() && !selectedImage) || loading) return;
+        setLastVoiceInput(false); // Reset voice flag
 
         const userMessage: Message = {
             id: Date.now(),
@@ -138,7 +239,7 @@ export default function Copilot() {
         setLoading(true);
 
         try {
-            const history = messages.filter(m => !m.pending).map(m => ({
+            const history = messages.filter(m => !m.pending && m.text).map(m => ({
                 role: m.sender === 'user' ? 'user' : 'model',
                 parts: [{ text: m.text }]
             }));
@@ -155,9 +256,11 @@ export default function Copilot() {
                 const aiText = result.data.text;
                 setMessages(prev => prev.map(m => m.id === userMessage.id ? { ...m, pending: false } : m));
                 setMessages(prev => [...prev, { id: Date.now() + 1, text: aiText, sender: 'ai' }]);
+
+                handleAgentResponse(aiText); // Trigger Intent Routing (No TTS for text input usually, but we check flag)
             } else if (result.queued) {
                 setMessages(prev => prev.map(m => m.id === userMessage.id ? { ...m, pending: true } : m));
-                setMessages(prev => [...prev, { id: Date.now() + 1, text: "You are offline. I've queued this analysis to run as soon as connection is restored.", sender: 'ai' }]);
+                setMessages(prev => [...prev, { id: Date.now() + 1, text: "Queued for sync.", sender: 'ai' }]);
             }
         } catch (error) {
             console.error("API Error:", error);
@@ -175,8 +278,18 @@ export default function Copilot() {
                     <Text className="text-slate-900 font-bold text-lg">Clinical Copilot</Text>
                     <Text className="text-teal-600 text-xs font-bold uppercase">Gemini 3 Pro Active</Text>
                 </View>
-                <View className="bg-teal-100 px-3 py-1 rounded-full">
-                    <Text className="text-teal-700 text-xs font-bold">Online</Text>
+                <View className="flex-row items-center space-x-2">
+                    <TouchableOpacity
+                        onPress={() => setIsHandsFree(!isHandsFree)}
+                        className={`px-3 py-1 rounded-full border ${isHandsFree ? 'bg-teal-600 border-teal-700' : 'bg-slate-100 border-slate-200'}`}
+                    >
+                        <Text className={`text-xs font-bold ${isHandsFree ? 'text-white' : 'text-slate-600'}`}>
+                            {isHandsFree ? 'Auto-Chat ON' : 'Auto-Chat OFF'}
+                        </Text>
+                    </TouchableOpacity>
+                    <View className="bg-teal-100 px-3 py-1 rounded-full">
+                        <Text className="text-teal-700 text-xs font-bold">Online</Text>
+                    </View>
                 </View>
             </View>
 

@@ -38,6 +38,17 @@ export default function SettingsScreen() {
                 className="flex-1 p-4"
                 refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
             >
+                {/* Emergency Actions */}
+                <TouchableOpacity
+                    onPress={async () => {
+                        await database.clearQueue();
+                        alert("Queue Cleared! Errors should stop.");
+                    }}
+                    className="bg-red-500 p-3 rounded-xl mb-4 self-end"
+                >
+                    <Text className="text-white font-bold">Clear Sync Queue</Text>
+                </TouchableOpacity>
+
                 {/* Security Status Card */}
                 <View className="bg-teal-700 p-4 rounded-xl mb-6 shadow-sm">
                     <View className="flex-row items-center mb-2">

@@ -47,23 +47,27 @@ export default function BillingScreen() {
     const generateCodes = async (item: BillingItem) => {
         setLoading(true);
         try {
-            const prompt = `Act as a Certified Medical Coder. Analyze this clinical note and extract the most appropriate ICD-10-CM diagnostic codes and CPT procedural codes. Return strictly valid JSON format: { "icd": ["code1", "code2"], "cpt": ["code1"], "estimated_total": 150.00 } \n\n Clinical Note: Patient: ${item.patientName}. Condition: ${item.notes}.`;
+            const prompt = `Act as a Certified Medical Coder. Analyze this clinical note and extract the most appropriate ICD-10-CM diagnostic codes and CPT procedural codes. Return validation JSON matching this schema: { "icd": ["code1"], "cpt": ["code1"], "estimated_total": 150.00 } \n\n Clinical Note: Patient: ${item.patientName}. Condition: ${item.notes}.`;
 
             Alert.alert("AI Coder", "Gemini is analyzing the chart...");
 
-            const result = await syncService.executeOrQueue('/api/analyze', 'POST', { prompt });
+            const result = await syncService.executeOrQueue('/api/analyze', 'POST', {
+                prompt,
+                generationConfig: { responseMimeType: "application/json" }
+            });
 
             if (result.success) {
-                // Parse AI response (assuming text contains JSON)
-                // Gemini might return markdown ```json ... ```, so clean it
-                const raw = result.data.text;
-                const cleanJson = raw.replace(/```json|```/g, '').trim();
+                // Parse AI response (Direct JSON now)
                 let parsed;
                 try {
-                    parsed = JSON.parse(cleanJson);
+                    const raw = result.data.text;
+                    parsed = JSON.parse(raw);
+
+                    // Validate structure
+                    if (!parsed.icd || !parsed.cpt) throw new Error("Invalid structure");
                 } catch (e) {
-                    console.log("JSON Parse failed, using raw", raw);
-                    // Fallback mock if AI returns plain text
+                    console.log("JSON Parse failed", e);
+                    // Fallback mock only on total failure
                     parsed = { icd: ["R03.0"], cpt: ["99213"], estimated_total: 120.00 };
                 }
 

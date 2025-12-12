@@ -4,7 +4,7 @@ import axios from 'axios';
 import { Platform } from 'react-native';
 
 const API_URL = Platform.OS === 'android'
-    ? 'http://10.0.2.2:3000'
+    ? 'http://10.11.178.99:3000'
     : 'http://localhost:3000';
 
 class SyncService {
@@ -42,8 +42,11 @@ class SyncService {
                     data: body
                 });
                 return { success: true, data: response.data };
-            } catch (error) {
-                console.log("Online request failed, queuing...", error);
+            } catch (error: any) {
+                console.log("Online request failed, queuing...", error.message);
+                if (error.response) {
+                    console.log("Server responded with:", error.response.status, error.response.data);
+                }
                 // Fallthrough to queue if network error (not 4xx/5xx logic for simplicity here, but ideally differentiate)
                 // For now, if it fails, we queue it to be safe.
                 await database.queueAction(endpoint, method, body);
