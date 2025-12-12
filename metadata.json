@@ -1,0 +1,8 @@
+{
+  "name": "Gemini Clinic Agent",
+  "description": "An autonomous AI co-worker for clinicians, powered by Gemini 3 Pro. Features patient intake, multimodal analysis, and automated SOAP documentation in a HIPAA-compliant interface.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
